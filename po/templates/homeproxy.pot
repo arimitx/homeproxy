@@ -785,6 +785,10 @@ msgstr ""
 msgid "Encrypt method"
 msgstr ""
 
+#: htdocs/luci-static/resources/view/homeproxy/client.js:219
+msgid "Enhanced DNS Query"
+msgstr ""
+
 #: htdocs/luci-static/resources/view/homeproxy/status.js:139
 msgid "Error"
 msgstr ""
@@ -870,6 +874,10 @@ msgstr ""
 #: htdocs/luci-static/resources/view/homeproxy/node.js:736
 #: htdocs/luci-static/resources/view/homeproxy/server.js:385
 msgid "Flow"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/homeproxy/client.js:181
+msgid "For Enhanced DNS Query, choose a DNS server that supports EDNS Client Subnet (ECS)."
 msgstr ""
 
 #: htdocs/luci-static/resources/view/homeproxy/client.js:423

@@ -808,6 +808,10 @@ msgstr "启用 SUoT 协议，需要服务端支持。与多路复用冲突。"
 msgid "Encrypt method"
 msgstr "加密方式"
 
+#: htdocs/luci-static/resources/view/homeproxy/client.js:219
+msgid "Enhanced DNS Query"
+msgstr "增强DNS查询"
+
 #: htdocs/luci-static/resources/view/homeproxy/status.js:139
 msgid "Error"
 msgstr "错误"
@@ -894,6 +898,10 @@ msgstr "防火墙"
 #: htdocs/luci-static/resources/view/homeproxy/server.js:385
 msgid "Flow"
 msgstr "流控"
+
+#: htdocs/luci-static/resources/view/homeproxy/client.js:181
+msgid "For Enhanced DNS Query, choose a DNS server that supports EDNS Client Subnet (ECS)."
+msgstr "启用增强DNS查询时，请选择支持 EDNS 客户端子网（ECS）的 DNS 服务器。"
 
 #: htdocs/luci-static/resources/view/homeproxy/client.js:423
 msgid "For resolving domain name in the server address."

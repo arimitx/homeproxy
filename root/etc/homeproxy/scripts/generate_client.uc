@@ -43,8 +43,11 @@ const ucinode = 'node';
 const uciruleset = 'ruleset';
 
 const routing_mode = uci.get(uciconfig, ucimain, 'routing_mode') || 'bypass_mainland_china';
+const enhanced_dns = routing_mode !== 'custom' && uci.get(uciconfig, ucimain, 'enhanced_dns') === '1';
+const china_dns_tag = routing_mode === 'bypass_mainland_china' && !enhanced_dns ? 'china-dns' : 'default-dns';
 
-let wan_dns = ubus.call('network.interface', 'status', {'interface': 'wan'})?.['dns-server']?.[0];
+const wan_dns_servers = ubus.call('network.interface', 'status', {'interface': 'wan'})?.['dns-server'] || [];
+let wan_dns = wan_dns_servers[0];
 if (!wan_dns)
 	wan_dns = (routing_mode in ['proxy_mainland_china', 'global']) ? '8.8.8.8' : '223.5.5.5';
 
@@ -57,18 +60,18 @@ const ipv6_support = uci.get(uciconfig, ucimain, 'ipv6_support') || '0';
 let main_node, main_udp_node, dedicated_udp_node, default_outbound, default_outbound_dns,
     domain_strategy, dns_server, china_dns_server, dns_default_strategy, dns_default_server,
     dns_disable_cache, dns_disable_cache_expire, dns_client_subnet,
-    cache_file_store_rdrc, cache_file_rdrc_timeout, direct_domain_list, proxy_domain_list;
+    cache_file_store_rdrc, cache_file_rdrc_timeout, direct_domain_list, proxy_domain_list, gfw_domain_list;
 
 if (routing_mode !== 'custom') {
 	main_node = uci.get(uciconfig, ucimain, 'main_node') || 'nil';
 	main_udp_node = uci.get(uciconfig, ucimain, 'main_udp_node') || 'nil';
 	dedicated_udp_node = !isEmpty(main_udp_node) && !(main_udp_node in ['same', main_node]);
 
-	dns_server = uci.get(uciconfig, ucimain, 'dns_server');
+	dns_server = uci.get(uciconfig, ucimain, 'dns_server') || (enhanced_dns ? '8.8.8.8' : null);
 	if (isEmpty(dns_server) || dns_server === 'wan')
 		dns_server = wan_dns;
 
-	if (routing_mode === 'bypass_mainland_china') {
+	if (china_dns_tag === 'china-dns') {
 		china_dns_server = uci.get(uciconfig, ucimain, 'china_dns_server');
 		if (isEmpty(china_dns_server) || type(china_dns_server) !== 'string' || china_dns_server === 'wan')
 			china_dns_server = wan_dns;
@@ -82,6 +85,12 @@ if (routing_mode !== 'custom') {
 	proxy_domain_list = trim(readfile(HP_DIR + '/resources/proxy_list.txt'));
 	if (proxy_domain_list)
 		proxy_domain_list = split(proxy_domain_list, /[\r\n]/);
+
+	if (enhanced_dns) {
+		const gfw_list = trim(readfile(HP_DIR + '/resources/gfw_list.txt'));
+		if (gfw_list)
+			gfw_domain_list = split(gfw_list, /\s+/);
+	}
 } else {
 	/* DNS settings */
 	dns_default_strategy = uci.get(uciconfig, ucidnssetting, 'default_strategy');
@@ -135,6 +144,31 @@ const log_level = uci.get(uciconfig, ucimain, 'log_level') || 'warn';
 /* UCI config end */
 
 /* Config helper start */
+function wan_dns_subnet(servers) {
+	for (let server in servers) {
+		const addr = iptoarr(server);
+		if (length(addr) === 4) {
+			/* Private, shared, loopback and link-local resolvers cannot locate a CDN edge. */
+			if (addr[0] === 0 || addr[0] === 10 || addr[0] === 127 || addr[0] >= 224 ||
+			    (addr[0] === 100 && (addr[1] & 192) === 64) ||
+			    (addr[0] === 169 && addr[1] === 254) ||
+			    (addr[0] === 172 && (addr[1] & 240) === 16) ||
+			    (addr[0] === 192 && addr[1] === 168))
+				continue;
+
+			addr[3] = 0;
+			return arrtoip(addr) + '/24';
+		}
+		if (length(addr) === 16 && (addr[0] & 224) === 32) {
+			/* Global unicast IPv6: keep the first 56 bits. */
+			for (let i = 7; i < length(addr); i++)
+				addr[i] = 0;
+			return arrtoip(addr) + '/56';
+		}
+	}
+	return null;
+}
+
 function parse_port(strport) {
 	if (type(strport) !== 'array' || isEmpty(strport))
 		return null;
@@ -450,18 +484,23 @@ if (!isEmpty(main_node)) {
 		push(config.dns.rules, {
 			rule_set: 'direct-domain',
 			action: 'route',
-			server: (routing_mode === 'bypass_mainland_china') ? 'china-dns' : 'default-dns'
+			server: china_dns_tag
 		});
 
 	/* Filter out SVCB/HTTPS queries for "exquisite" Apple devices */
-	if (routing_mode === 'gfwlist' || length(proxy_domain_list))
+	const reject_all_svcb = routing_mode === 'gfwlist' && !enhanced_dns;
+	let svcb_rule_set = length(proxy_domain_list) ? 'proxy-domain' : null;
+	/* Enhanced mode also receives names that dnsmasq used to resolve itself. */
+	if (enhanced_dns && routing_mode === 'gfwlist' && length(gfw_domain_list))
+		svcb_rule_set = svcb_rule_set ? [svcb_rule_set, 'gfw-list'] : 'gfw-list';
+	if (reject_all_svcb || svcb_rule_set)
 		push(config.dns.rules, {
-			rule_set: (routing_mode !== 'gfwlist') ? 'proxy-domain' : null,
+			rule_set: reject_all_svcb ? null : svcb_rule_set,
 			query_type: [64, 65],
 			action: 'reject'
 		});
 
-	if (routing_mode === 'bypass_mainland_china') {
+	if (china_dns_tag === 'china-dns')
 		push(config.dns.servers, {
 			tag: 'china-dns',
 			domain_resolver: {
@@ -472,6 +511,7 @@ if (!isEmpty(main_node)) {
 			...parse_dnsserver(china_dns_server)
 		});
 
+	if (enhanced_dns || routing_mode === 'bypass_mainland_china') {
 		if (length(proxy_domain_list))
 			push(config.dns.rules, {
 				rule_set: 'proxy-domain',
@@ -482,9 +522,30 @@ if (!isEmpty(main_node)) {
 		push(config.dns.rules, {
 			rule_set: 'geosite-cn',
 			action: 'route',
-			server: 'china-dns',
-			strategy: 'prefer_ipv6'
+			server: china_dns_tag,
+			strategy: enhanced_dns ? null : 'prefer_ipv6'
 		});
+	}
+
+	if (enhanced_dns) {
+		/* With no GFW list or usable WAN prefix, fall through to ordinary main DNS. */
+		if (length(gfw_domain_list)) {
+			push(config.dns.rules, {
+				rule_set: 'gfw-list',
+				action: 'route',
+				server: 'main-dns'
+			});
+			const subnet = wan_dns_subnet(wan_dns_servers);
+			if (subnet)
+				push(config.dns.rules, {
+					rule_set: 'geoip-cn',
+					action: 'route',
+					server: 'main-dns',
+					client_subnet: subnet,
+					disable_cache: true
+				});
+		}
+	} else if (routing_mode === 'bypass_mainland_china') {
 		push(config.dns.rules, {
 			type: 'logical',
 			mode: 'and',
@@ -796,7 +857,7 @@ if (!isEmpty(main_node)) {
 	/* Avoid DNS loop */
 	config.route.default_domain_resolver = {
 		action: 'route',
-		server: (routing_mode === 'bypass_mainland_china') ? 'china-dns' : 'default-dns',
+		server: china_dns_tag,
 		strategy: (ipv6_support !== '1') ? 'prefer_ipv4' : null
 	};
 
@@ -843,7 +904,7 @@ if (!isEmpty(main_node)) {
 			]
 		});
 
-	if (routing_mode === 'bypass_mainland_china') {
+	if (enhanced_dns || routing_mode === 'bypass_mainland_china') {
 		push(config.route.rule_set, {
 			type: 'remote',
 			tag: 'geoip-cn',
@@ -858,6 +919,15 @@ if (!isEmpty(main_node)) {
 			url: 'https://fastly.jsdelivr.net/gh/1715173329/sing-geosite@rule-set-unstable/geosite-geolocation-cn.srs',
 			download_detour: 'main-out'
 		});
+	}
+	if (enhanced_dns) {
+		if (length(gfw_domain_list))
+			push(config.route.rule_set, {
+				type: 'inline',
+				tag: 'gfw-list',
+				rules: [{ domain_suffix: gfw_domain_list }]
+			});
+	} else if (routing_mode === 'bypass_mainland_china') {
 		push(config.route.rule_set, {
 			type: 'remote',
 			tag: 'geosite-noncn',
@@ -942,7 +1012,7 @@ if (!isEmpty(main_node)) {
 /* Routing rules end */
 
 /* Experimental start */
-if (routing_mode in ['bypass_mainland_china', 'custom']) {
+if (enhanced_dns || routing_mode in ['bypass_mainland_china', 'custom']) {
 	config.experimental = {
 		cache_file: {
 			enabled: true,

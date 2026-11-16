@@ -177,7 +177,9 @@ return view.extend({
 		o.depends('main_udp_node', 'urltest');
 
 		o = s.taboption('routing', form.Value, 'dns_server', _('DNS server'),
-			_('Support UDP, TCP, DoH, DoQ, DoT. TCP protocol will be used if not specified.'));
+			_('Support UDP, TCP, DoH, DoQ, DoT. TCP protocol will be used if not specified.') + '<br/>' +
+			_('For Enhanced DNS Query, choose a DNS server that supports EDNS Client Subnet (ECS).'));
+		const mainDns = o;
 		o.value('wan', _('WAN DNS (read from interface)'));
 		o.value('1.1.1.1', _('CloudFlare Public DNS (1.1.1.1)'));
 		o.value('208.67.222.222', _('Cisco Public DNS (208.67.222.222)'));
@@ -214,6 +216,14 @@ return view.extend({
 			return true;
 		}
 
+		o = s.taboption('routing', form.Flag, 'enhanced_dns', _('Enhanced DNS Query'));
+		o.depends({'routing_mode': 'custom', '!reverse': true});
+		o.default = o.disabled;
+		o.onchange = function(ev, section_id, value) {
+			if (value === this.enabled)
+				mainDns.getUIElement(section_id).setValue('8.8.8.8');
+		}
+
 		o = s.taboption('routing', form.Value, 'china_dns_server', _('China DNS server'),
 			_('The dns server for resolving China domains. Support UDP, TCP, DoH, DoQ, DoT.'));
 		o.value('wan', _('WAN DNS (read from interface)'));
@@ -221,7 +231,8 @@ return view.extend({
 		o.value('210.2.4.8', _('CNNIC Public DNS (210.2.4.8)'));
 		o.value('119.29.29.29', _('Tencent Public DNS (119.29.29.29)'));
 		o.value('117.50.10.10', _('ThreatBook Public DNS (117.50.10.10)'));
-		o.depends('routing_mode', 'bypass_mainland_china');
+		o.depends({routing_mode: 'bypass_mainland_china', enhanced_dns: '0'});
+		o.retain = true;
 		o.default = '223.5.5.5';
 		o.rmempty = false;
 		o.validate = function(section_id, value) {

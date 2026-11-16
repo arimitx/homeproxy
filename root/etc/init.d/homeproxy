@@ -30,9 +30,11 @@ log() {
 start_service() {
 	config_load "$CONF"
 
-	local routing_mode proxy_mode
+	local routing_mode proxy_mode enhanced_dns
 	config_get routing_mode "config" "routing_mode" "bypass_mainland_china"
 	config_get proxy_mode "config" "proxy_mode" "redirect_tproxy"
+	config_get_bool enhanced_dns "config" "enhanced_dns" "0"
+	[ "$routing_mode" != "custom" ] || enhanced_dns=0
 
 	local outbound_node
 	if [ "$routing_mode" != "custom" ]; then
@@ -78,14 +80,15 @@ start_service() {
 		config_get dns_port "infra" "dns_port" "5333"
 		mkdir -p "$DNSMASQ_DIR"
 		echo -e "conf-dir=$DNSMASQ_DIR" > "$DNSMASQ_DIR/../dnsmasq-homeproxy.conf"
-		case "$routing_mode" in
-		"bypass_mainland_china"|"custom"|"global")
-			cat <<-EOF >> "$DNSMASQ_DIR/redirect-dns.conf"
+		if [ "$enhanced_dns" = "1" ] || [ "$routing_mode" != "gfwlist" -a "$routing_mode" != "proxy_mainland_china" ]; then
+			cat <<-EOF > "$DNSMASQ_DIR/redirect-dns.conf"
 				no-poll
 				no-resolv
 				server=127.0.0.1#$dns_port
 			EOF
-			;;
+			[ "$enhanced_dns" = "0" ] || echo "strip-subnet" >> "$DNSMASQ_DIR/redirect-dns.conf"
+		fi
+		case "$routing_mode" in
 		"gfwlist")
 			local gfw_nftset_v6
 			[ "$ipv6_support" -eq "0" ] || gfw_nftset_v6=",6#inet#fw4#homeproxy_gfw_list_v6"
@@ -156,7 +159,9 @@ start_service() {
 			procd_add_jail "sing-box-c" log procfs
 			procd_add_jail_mount "$RUN_DIR/sing-box-c.json"
 			procd_add_jail_mount_rw "$RUN_DIR/sing-box-c.log"
-			[ "$routing_mode" != "bypass_mainland_china" ] || procd_add_jail_mount_rw "$RUN_DIR/cache.db"
+			if [ "$enhanced_dns" = "1" ] || [ "$routing_mode" = "bypass_mainland_china" ]; then
+				procd_add_jail_mount_rw "$RUN_DIR/cache.db"
+			fi
 			procd_add_jail_mount "$HP_DIR/certs/"
 			procd_add_jail_mount "/etc/ssl/"
 			procd_add_jail_mount "/etc/localtime"
@@ -225,16 +230,13 @@ start_service() {
 	procd_set_param respawn
 	procd_close_instance
 
-	case "$routing_mode" in
-	"bypass_mainland_china")
+	if [ "$enhanced_dns" = "1" ] || [ "$routing_mode" = "bypass_mainland_china" ]; then
 		# Prepare cache db
 		[ -e "$RUN_DIR/cache.db" ] || touch "$RUN_DIR/cache.db"
-		;;
-	"custom")
+	elif [ "$routing_mode" = "custom" ]; then
 		# Prepare ruleset directory
 		[ -d "$HP_DIR/ruleset" ] || mkdir -p "$HP_DIR/ruleset"
-		;;
-	esac
+	fi
 
 	[ "$outbound_node" = "nil" ] || echo > "$RUN_DIR/sing-box-c.log"
 	if [ "$server_enabled" = "1" ]; then
